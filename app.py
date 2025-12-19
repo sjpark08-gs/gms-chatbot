@@ -104,8 +104,8 @@ if target_file:
         st.error(f"파일을 읽는 중 오류가 발생했습니다: {e}")
         st.stop()
 
-    # LLM 설정 (비용 절약을 위해 gpt-4o-mini로 테스트 권장, 성능 필요시 gpt-4o 유지)
-    llm = ChatOpenAI(model="gpt-4o", temperature=0)
+    # LLM 설정 
+    llm = ChatOpenAI(model="gpt-5-a-mini", temperature=0)
     
     agent = create_pandas_dataframe_agent(
         llm, 
@@ -124,7 +124,7 @@ if target_file:
                 try:
                     # 이전 대화 기록 (최근 2개만 참조하여 비용 절약)
                     chat_history_text = ""
-                    for msg in st.session_state.messages[-2:]: 
+                    for msg in st.session_state.messages[-4:]: 
                         role = "User" if msg["role"] == "user" else "AI"
                         content = msg["content"]
                         chat_history_text += f"{role}: {content}\n"
@@ -169,4 +169,5 @@ if target_file:
 
                 except Exception as e:
                     st.error(f"오류가 발생했습니다: {e}")
+
 
