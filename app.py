@@ -40,7 +40,7 @@ COLUMN_DEFINITIONS = {
 }
 
 # 2. 기본 파일 설정 (GitHub에 이 파일이 꼭 있어야 합니다!)
-DEFAULT_FILE_PATH = "Updated_Monthly_Repor.xlsx"
+DEFAULT_FILE_PATH = "Updated_Monthly_Report.xlsx"
 # ==========================================
 
 st.title("🤖 GMS 엑셀 데이터 분석 챗봇")
@@ -54,7 +54,7 @@ with st.sidebar:
         st.json(COLUMN_DEFINITIONS)
     
     st.markdown("---")
-    st.markdown("**사용 팁:**\n- '월별 매출 추이를 그려줘'\n- '비용이 가장 높은 지역은?'")
+    st.markdown("**사용 팁:**\n- '월별 매출 추이를 그려줘'")
 
 # 분석할 파일 결정 로직
 target_file = None
@@ -169,3 +169,4 @@ if target_file:
 
                 except Exception as e:
                     st.error(f"오류가 발생했습니다: {e}")
+
