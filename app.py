@@ -105,7 +105,7 @@ if target_file:
         st.stop()
 
     # LLM 설정 
-    llm = ChatOpenAI(model="gpt-4o-mini", temperature=0)
+    llm = ChatOpenAI(model="gpt-5-mini", temperature=0)
     
     agent = create_pandas_dataframe_agent(
         llm, 
@@ -169,6 +169,7 @@ if target_file:
 
                 except Exception as e:
                     st.error(f"오류가 발생했습니다: {e}")
+
 
 
 
