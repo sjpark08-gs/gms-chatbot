@@ -30,7 +30,7 @@ COLUMN_DEFINITIONS = {
 }
 
 # 2. Default File Path (Must exist in GitHub repo)
-DEFAULT_FILE_PATH = "Updated_Monthly_Repor.xlsx"
+DEFAULT_FILE_PATH = "Updated_Monthly_Report.xlsx"
 # ==========================================
 
 st.title("🤖 GMS Excel Data Analysis Chatbot")
@@ -115,7 +115,7 @@ if target_file:
                 try:
                     # History Context (Last 2 messages)
                     chat_history_text = ""
-                    for msg in st.session_state.messages[-2:]: 
+                    for msg in st.session_state.messages[-4:]: 
                         role = "User" if msg["role"] == "user" else "AI"
                         content = msg["content"]
                         chat_history_text += f"{role}: {content}\n"
@@ -162,3 +162,4 @@ if target_file:
 
                 except Exception as e:
                     st.error(f"An error occurred: {e}")
+
