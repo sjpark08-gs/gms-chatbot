@@ -104,8 +104,8 @@ if target_file:
         st.error(f"파일을 읽는 중 오류가 발생했습니다: {e}")
         st.stop()
 
-    # LLM 설정 
-    llm = ChatOpenAI(model="gpt-5-mini", temperature=0)
+    # LLM 설정
+    llm = ChatOpenAI(model="gpt-5-a-mini", temperature=0)
     
     agent = create_pandas_dataframe_agent(
         llm, 
@@ -122,15 +122,17 @@ if target_file:
         with st.chat_message("assistant"):
             with st.spinner("분석 중입니다..."):
                 try:
-                    # 이전 대화 기록 (최근 2개만 참조하여 비용 절약)
+                    # 1. 이전 대화 기록을 텍스트로 변환 (최근 4개 메시지만 참조 - 토큰 절약)
                     chat_history_text = ""
                     for msg in st.session_state.messages[-4:]: 
                         role = "User" if msg["role"] == "user" else "AI"
                         content = msg["content"]
                         chat_history_text += f"{role}: {content}\n"
 
+                    # 2. 프롬프트 구성 (지시사항 + 대화기록 + 현재질문)
                     instruction = f"""
                     너는 유능한 데이터 분석가야.
+                    
                     [데이터 컬럼 명세서]
                     {COLUMN_DEFINITIONS}
                     사용자가 한글로 질문하면 위 명세서를 참고해.
@@ -140,15 +142,23 @@ if target_file:
                     2. 그래프를 JSON 파일로 저장 (`output_plot.json`)
                     3. `fig.show()` 금지
                     
-                    [이전 대화 맥락]
+                    [기억해야 할 이전 대화]
+                    아래 대화의 맥락을 파악해서 현재 질문에 답해. 
+                    특히 "이걸로", "바꿔줘", "다시 그려줘" 같은 지시가 나오면 이전 대화의 데이터를 기반으로 수정해.
+                    ---
                     {chat_history_text}
+                    ---
                     
-                    질문에 대해 한국어로 답변해줘.
+                    최종 답변은 한국어로 해줘.
                     """
+                    
+                    # 3. 질문 전달
                     full_prompt = f"{instruction}\n\n[현재 질문]\n{prompt}"
+                    
                     response = agent.invoke(full_prompt)
                     answer = response['output']
 
+                    # ... (이하 코드는 기존과 동일: 답변 출력, 그래프 처리 등) ...
                     st.markdown(answer)
                     msg_data = {"role": "assistant", "content": answer}
 
@@ -169,7 +179,4 @@ if target_file:
 
                 except Exception as e:
                     st.error(f"오류가 발생했습니다: {e}")
-
-
-
-
+    st.info("👈 파일을 업로드해주세요.")
