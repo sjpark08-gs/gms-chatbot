@@ -141,50 +141,47 @@ for msg in st.session_state.messages:
             st.plotly_chart(pio.from_json(msg["plot_json"]), use_container_width=True)
 
 # =========================================================
-# 8. Agent & Logic (대화 기억 기능 추가)
+# 8. Agent & Logic (기존 기능 유지 + 대화 문맥 기억 추가)
 # =========================================================
 llm = ChatOpenAI(
     model="gpt-4o-mini", 
     temperature=0
 )
 
-# 1. 이전 대화 기록 요약본 생성 (에이전트에게 문맥 전달용)
-# 너무 길어질 경우 최근 5~10개만 유지하는 것이 토큰 절약에 좋습니다.
-chat_history_str = ""
-for msg in st.session_state.messages[-6:]:  # 최근 3번의 대화쌍(총 6개 메시지) 참조
-    role_label = "User" if msg["role"] == "user" else "Assistant"
-    chat_history_str += f"{role_label}: {msg['content']}\n"
-
 # 딕셔너리를 문자열로 변환 (Prompt용)
 column_def_str = "\n".join([f"- {k}: {v}" for k, v in COLUMN_DEFINITIONS.items()])
 
-# 2. 프롬프트에 [Conversation History] 섹션 추가
-PREFIX_PROMPT = f"""
+if prompt := st.chat_input("Ask a question..."):
+    st.chat_message("user").markdown(prompt)
+    st.session_state.messages.append({"role": "user", "content": prompt})
+
+    # ⭐ [추가] 이전 대화 기록을 텍스트로 변환 (최근 5개 메시지만)
+    history = "\n".join([f"{m['role']}: {m['content']}" for m in st.session_state.messages[-6:-1]])
+
+    # ⭐ [수정] PREFIX_PROMPT를 입력 시점에 정의하여 'history'를 포함시킴
+    PREFIX_PROMPT = f"""
 You are a Senior Data Analyst.
 Use ONLY the provided DataFrame.
 
 [Column Mapping]
 {column_def_str}
 
-[Conversation History]
-{chat_history_str}
-(참고: 위 내용은 이전 대화입니다. 사용자의 질문이 '그것', '저번' 등 이전 문맥을 포함하면 위 내용을 참고하세요.)
+[Conversation Context]
+{history}
+(Note: Use this context to understand pronouns like 'it', 'before', or 'that table'.)
 
 [Instructions]
-1. **Language Policy:** Detect the language of the user's question and respond in the same language.
+1. **Language Policy:** Detect user's language and respond in the SAME language (English or Korean).
 2. **Visualization:** If requested, use plotly and MUST save it as 'output_plot.json' via `fig.write_json('output_plot.json')`.
 3. **Tool Usage:** Use the pandas dataframe tool for analysis.
 4. **Verification:** Check column names before using them.
+5. **Final Answer:** Provide a concise summary.
 """
-
-if prompt := st.chat_input("Ask a question..."):
-    st.chat_message("user").markdown(prompt)
-    st.session_state.messages.append({"role": "user", "content": prompt})
 
     with st.chat_message("assistant"):
         with st.spinner("Analyzing..."):
             try:
-                # 데이터 필터링 로직 (기존과 동일)
+                # 1. Filter Data (기존 로직 유지)
                 years = extract_years(prompt)
                 df_filtered = df.copy()
                 if years:
@@ -193,29 +190,33 @@ if prompt := st.chat_input("Ask a question..."):
                     df_filtered = df.copy()
                 df_filtered = filter_columns_by_question(df_filtered, prompt)
 
-                # 에이전트 생성 (매번 현재 필터링된 데이터와 문맥을 가지고 생성)
+                # 2. Create Agent (기존 로직 유지)
                 agent = create_pandas_dataframe_agent(
                     llm,
                     df_filtered,
                     verbose=True,
                     allow_dangerous_code=True,
-                    prefix=PREFIX_PROMPT,
+                    prefix=PREFIX_PROMPT, # 위에서 정의한 context 포함 프롬프트 사용
                     agent_type="openai-tools",
                     max_iterations=10,
                     agent_executor_kwargs={"handle_parsing_errors": True}
                 )
 
+                # 에이전트 실행
                 response = agent.invoke({"input": prompt})
                 answer = response["output"]
 
                 st.markdown(answer)
                 msg_data = {"role": "assistant", "content": answer}
 
-                # 차트 출력 로직 (기존과 동일)
+                # 3. 차트 파일 확인 및 출력 (기존 로직 유지)
                 if os.path.exists("output_plot.json"):
                     with open("output_plot.json", "r", encoding="utf-8") as f:
                         plot_json_content = f.read()
-                    st.plotly_chart(pio.from_json(plot_json_content), use_container_width=True)
+                    
+                    fig = pio.from_json(plot_json_content)
+                    st.plotly_chart(fig, use_container_width=True)
+                    
                     msg_data["plot_json"] = plot_json_content
                     os.remove("output_plot.json")
 
@@ -223,4 +224,5 @@ if prompt := st.chat_input("Ask a question..."):
 
             except Exception as e:
                 st.warning(f"⚠️ Analysis failed. (Error: {e})")
+
 
