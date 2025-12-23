@@ -141,38 +141,40 @@ for msg in st.session_state.messages:
             st.plotly_chart(pio.from_json(msg["plot_json"]), use_container_width=True)
 
 # =========================================================
-# 8. Agent & Logic (언어 및 차트 생성 기능 강화)
+# 8. Agent & Logic (대화 기억 기능 추가)
 # =========================================================
 llm = ChatOpenAI(
     model="gpt-4o-mini", 
     temperature=0
 )
 
+# 1. 이전 대화 기록 요약본 생성 (에이전트에게 문맥 전달용)
+# 너무 길어질 경우 최근 5~10개만 유지하는 것이 토큰 절약에 좋습니다.
+chat_history_str = ""
+for msg in st.session_state.messages[-6:]:  # 최근 3번의 대화쌍(총 6개 메시지) 참조
+    role_label = "User" if msg["role"] == "user" else "Assistant"
+    chat_history_str += f"{role_label}: {msg['content']}\n"
+
 # 딕셔너리를 문자열로 변환 (Prompt용)
 column_def_str = "\n".join([f"- {k}: {v}" for k, v in COLUMN_DEFINITIONS.items()])
 
-# 에이전트에게 주는 핵심 지시사항
+# 2. 프롬프트에 [Conversation History] 섹션 추가
 PREFIX_PROMPT = f"""
 You are a Senior Data Analyst.
 Use ONLY the provided DataFrame.
 
 [Column Mapping]
-Use this to interpret user queries:
 {column_def_str}
 
-[Instructions]
-1. **Language Policy:** - Detect the language of the user's question.
-   - If the user asks in English, you MUST respond in English.
-   - If the user asks in Korean, you MUST respond in Korean.
-   
-2. **Visualization/Charting:**
-   - If the user asks to draw a chart or visualize data, use the `plotly` library.
-   - **CRITICAL:** After creating a figure (e.g., `fig`), you MUST save it as a JSON file named 'output_plot.json' using the code: `fig.write_json('output_plot.json')`.
-   - Do not just mention the chart; execute the code to save the file.
+[Conversation History]
+{chat_history_str}
+(참고: 위 내용은 이전 대화입니다. 사용자의 질문이 '그것', '저번' 등 이전 문맥을 포함하면 위 내용을 참고하세요.)
 
-3. **Tool Usage:** You have a pandas dataframe tool. Use it to run python code.
+[Instructions]
+1. **Language Policy:** Detect the language of the user's question and respond in the same language.
+2. **Visualization:** If requested, use plotly and MUST save it as 'output_plot.json' via `fig.write_json('output_plot.json')`.
+3. **Tool Usage:** Use the pandas dataframe tool for analysis.
 4. **Verification:** Check column names before using them.
-5. **Final Answer:** Provide a concise summary of your findings along with the requested data.
 """
 
 if prompt := st.chat_input("Ask a question..."):
@@ -182,19 +184,16 @@ if prompt := st.chat_input("Ask a question..."):
     with st.chat_message("assistant"):
         with st.spinner("Analyzing..."):
             try:
-                # 1. Filter Data
+                # 데이터 필터링 로직 (기존과 동일)
                 years = extract_years(prompt)
                 df_filtered = df.copy()
-
                 if years:
                     df_filtered = df_filtered[df_filtered["Year"].isin(years)]
-                
                 if df_filtered.empty:
-                     df_filtered = df.copy()
-
+                    df_filtered = df.copy()
                 df_filtered = filter_columns_by_question(df_filtered, prompt)
 
-                # 2. Create Agent
+                # 에이전트 생성 (매번 현재 필터링된 데이터와 문맥을 가지고 생성)
                 agent = create_pandas_dataframe_agent(
                     llm,
                     df_filtered,
@@ -203,33 +202,25 @@ if prompt := st.chat_input("Ask a question..."):
                     prefix=PREFIX_PROMPT,
                     agent_type="openai-tools",
                     max_iterations=10,
-                    agent_executor_kwargs={
-                        "handle_parsing_errors": True
-                    }
+                    agent_executor_kwargs={"handle_parsing_errors": True}
                 )
 
-                # 에이전트 실행
                 response = agent.invoke({"input": prompt})
                 answer = response["output"]
 
                 st.markdown(answer)
                 msg_data = {"role": "assistant", "content": answer}
 
-                # 3. 차트 파일 확인 및 출력
+                # 차트 출력 로직 (기존과 동일)
                 if os.path.exists("output_plot.json"):
                     with open("output_plot.json", "r", encoding="utf-8") as f:
                         plot_json_content = f.read()
-                    
-                    # 화면에 차트 표시
-                    fig = pio.from_json(plot_json_content)
-                    st.plotly_chart(fig, use_container_width=True)
-                    
-                    # 메시지 기록에 저장
+                    st.plotly_chart(pio.from_json(plot_json_content), use_container_width=True)
                     msg_data["plot_json"] = plot_json_content
-                    # 사용 후 파일 삭제 (다음 질문과의 혼선 방지)
                     os.remove("output_plot.json")
 
                 st.session_state.messages.append(msg_data)
 
             except Exception as e:
                 st.warning(f"⚠️ Analysis failed. (Error: {e})")
+
