@@ -1,165 +1,235 @@
 import streamlit as st
 import pandas as pd
 import os
+import re
 import plotly.io as pio
 from dotenv import load_dotenv
 from langchain_openai import ChatOpenAI
 from langchain_experimental.agents import create_pandas_dataframe_agent
 
+# =========================================================
 # 1. Basic Setup
+# =========================================================
 load_dotenv()
-st.set_page_config(page_title="GMS Data Analysis Chatbot", page_icon="📊")
+st.set_page_config(
+    page_title="GMS Data Analysis Chatbot (Pro)",
+    page_icon="📊",
+    layout="wide"
+)
 
-# ==========================================
-# [Developer Settings]
-# 1. Column Dictionary (Translated Values to English)
-# Note: Keep the Keys (Left side) exactly matching your Excel Headers!
+# =========================================================
+# 2. Smart Excel Loader & Preprocess
+# =========================================================
+@st.cache_data 
+def load_and_process_data(file):
+    # 1. Load Smartly (Header Detection)
+    preview_df = pd.read_excel(file, sheet_name="2nd treatment", header=None, nrows=10)
+    header_idx = 0
+    keywords = ['date', '일자', '날짜', 'period', 'time']
+
+    for idx, row in preview_df.iterrows():
+        row_str = row.astype(str).str.lower().tolist()
+        if any(k in cell for cell in row_str for k in keywords):
+            header_idx = idx
+            break
+
+    df = pd.read_excel(file, sheet_name="2nd treatment", header=header_idx)
+
+    # 2. Preprocess
+    df.columns = df.columns.astype(str).str.strip().str.replace('\n', '')
+
+    for col in df.columns:
+        if col.lower() in ['date', 'time', 'period', '일자', '날짜']:
+            df.rename(columns={col: 'Date'}, inplace=True)
+            break
+
+    if 'Date' in df.columns:
+        df['Date'] = pd.to_datetime(df['Date'], errors='coerce')
+        df = df.dropna(subset=['Date'])
+        df['Year'] = df['Date'].dt.year  # ⭐ 미리 생성
+
+    for col in df.columns:
+        if col not in ['Date'] and df[col].dtype == 'object':
+            try:
+                df[col] = (
+                    df[col].astype(str)
+                    .str.replace(r'[$,\s]', '', regex=True)
+                )
+                df[col] = pd.to_numeric(df[col], errors='coerce')
+            except:
+                pass
+
+    return df
+
+# =========================================================
+# 3. Column Definitions
+# =========================================================
 COLUMN_DEFINITIONS = {
-    "Date": "Date, Time, Period, Duration",
     "Revenue": "Revenue, Sales, Income, Total Sales",
-    "Panelty": "Penalty, Fine",
-    "Water Consumption" : "Water Usage, Water Consumption, Water",
-    "Power Consumption" : "Power Usage, Electricity, Energy, Electric Bill",
-    "Pipe fee" : "Pipe Usage, Pipe Fee, Pipeline Cost",
-    "Cehmical Consumption-GMS" : "Chemical Usage, Chemical Cost, GMS Chemicals",
-    "Cehmical Consumption-KE" : "KE Chemical Usage, KEI Chemicals, KEI Cost",
-    "Cost": "Cost, Expense, Expenditure, Spending",
-    "Gross Profit": "Gross Profit, Operating Profit, Margin",
-    "Net Profit": "Net Profit, Net Income, Bottom Line",
-    "GA" : "GA, General Administrative Expenses, Admin Cost"
+    "Penalty": "Penalty, Fine",
+    "Water Consumption": "Water Usage, Water Consumption, Water",
+    "Power Consumption": "Power Usage, Electricity, Energy",
+    "Pipe fee": "Pipe Usage, Pipe Fee, Pipeline Cost",
+    "Cehmical Consumption-GMS": "Chemical Usage, GMS Chemicals",
+    "Cehmical Consumption-KE": "KE Chemical Usage, KE Chemicals",
+    "Cost": "Cost, Expense, Expenditure",
+    "Gross Profit": "Gross Profit, Operating Profit",
+    "Net Profit": "Net Profit, Net Income",
+    "GA": "GA, General Administrative Expenses"
 }
 
-# 2. Default File Path (Must exist in GitHub repo)
 DEFAULT_FILE_PATH = "Updated_Monthly_Report.xlsx"
-# ==========================================
 
-st.title("🤖 GMS Excel Data Analysis Chatbot")
+# =========================================================
+# 4. Token Optimizer
+# =========================================================
+def extract_years(text):
+    years = re.findall(r"(20\d{2})", text)
+    return list(set(map(int, years)))
 
-# Sidebar Settings
+def filter_columns_by_question(df, question):
+    selected = ["Date", "Year"] 
+    q = question.lower()
+
+    for col, desc in COLUMN_DEFINITIONS.items():
+        if any(word.strip().lower() in q for word in desc.split(",")):
+            if col in df.columns:
+                selected.append(col)
+
+    return df[selected] if len(selected) > 2 else df
+
+# =========================================================
+# 5. UI Setup
+# =========================================================
+st.title("🤖 GMS Data Analysis Agent (Optimized)")
+
 with st.sidebar:
     st.header("Settings")
-    uploaded_file = st.file_uploader("Upload New Excel File (Optional)", type=["xlsx", "xls"])
-    
-    with st.expander("ℹ️ View Column Definitions"):
-        st.json(COLUMN_DEFINITIONS)
-    
-    st.markdown("---")
-    st.markdown("**Tips:**\n- 'Show me the monthly revenue trend.'\n- 'Which region has the highest cost?'")
+    uploaded_file = st.file_uploader("Upload Excel File", type=["xlsx", "xls"])
 
-# File Selection Logic
-target_file = None
+source_file = uploaded_file if uploaded_file else DEFAULT_FILE_PATH
 
-if uploaded_file is not None:
-    # Priority 1: User uploaded file
-    target_file = uploaded_file
-    st.toast("📂 Analyzing the uploaded file.", icon="✅")
-elif os.path.exists(DEFAULT_FILE_PATH):
-    # Priority 2: Default file (GitHub)
-    target_file = DEFAULT_FILE_PATH
-    st.toast(f"📂 Analyzing the default data ('{DEFAULT_FILE_PATH}').", icon="ℹ️")
+# =========================================================
+# 6. Load Data
+# =========================================================
+if source_file:
+    try:
+        if "df" not in st.session_state:
+             st.session_state.df = load_and_process_data(source_file)
+    except Exception as e:
+        st.error(f"File Load Error: {e}")
+        st.stop()
 else:
-    # No file found
-    st.error(f"Error: Could not find the default file ('{DEFAULT_FILE_PATH}') and no file was uploaded.")
+    st.error("No file available.")
     st.stop()
 
+df = st.session_state.df
 
-# Initialize Session State
+with st.expander("📊 Data Preview"):
+    st.dataframe(df.head())
+
+# =========================================================
+# 7. Chat Interface
+# =========================================================
 if "messages" not in st.session_state:
     st.session_state.messages = []
 
-# Display Chat History
-for message in st.session_state.messages:
-    with st.chat_message(message["role"]):
-        st.markdown(message["content"])
-        if "plot_json" in message:
-            fig = pio.from_json(message["plot_json"])
-            st.plotly_chart(fig, use_container_width=True)
+for msg in st.session_state.messages:
+    with st.chat_message(msg["role"]):
+        st.markdown(msg["content"])
+        if "plot_json" in msg:
+            st.plotly_chart(pio.from_json(msg["plot_json"]), use_container_width=True)
 
-# Main Logic (When target_file is confirmed)
-if target_file:
-    try:
-        xls = pd.ExcelFile(target_file)
-        target_sheet = "2nd treatment"
+# =========================================================
+# 8. Agent & Logic (언어 및 차트 생성 기능 강화)
+# =========================================================
+llm = ChatOpenAI(
+    model="gpt-4o-mini", 
+    temperature=0
+)
 
-        if target_sheet in xls.sheet_names:
-            df = pd.read_excel(target_file, sheet_name=target_sheet)
-            # Data Preview
-            file_label = "Uploaded Data" if uploaded_file else "Default Data"
-            with st.expander(f"📊 {file_label} Preview ({target_sheet})"):
-                st.dataframe(df.head())
-        else:
-            st.error(f"Error: The sheet '{target_sheet}' was not found in the Excel file.")
-            st.stop()
-    except Exception as e:
-        st.error(f"Error reading the file: {e}")
-        st.stop()
+# 딕셔너리를 문자열로 변환 (Prompt용)
+column_def_str = "\n".join([f"- {k}: {v}" for k, v in COLUMN_DEFINITIONS.items()])
 
-    # LLM Setup
-    # Using gpt-4o as requested. Use "gpt-4o-mini" to save costs if needed.
-    llm = ChatOpenAI(model="gpt-4o", temperature=0)
-    
-    agent = create_pandas_dataframe_agent(
-        llm, 
-        df, 
-        verbose=True, 
-        allow_dangerous_code=True,
-        agent_executor_kwargs={"handle_parsing_errors": True} 
-    )
+# 에이전트에게 주는 핵심 지시사항
+PREFIX_PROMPT = f"""
+You are a Senior Data Analyst.
+Use ONLY the provided DataFrame.
 
-    if prompt := st.chat_input("Ask a question..."):
-        st.chat_message("user").markdown(prompt)
-        st.session_state.messages.append({"role": "user", "content": prompt})
+[Column Mapping]
+Use this to interpret user queries:
+{column_def_str}
 
-        with st.chat_message("assistant"):
-            with st.spinner("Analyzing..."):
-                try:
-                    # History Context (Last 2 messages)
-                    chat_history_text = ""
-                    for msg in st.session_state.messages[-4:]: 
-                        role = "User" if msg["role"] == "user" else "AI"
-                        content = msg["content"]
-                        chat_history_text += f"{role}: {content}\n"
+[Instructions]
+1. **Language Policy:** - Detect the language of the user's question.
+   - If the user asks in English, you MUST respond in English.
+   - If the user asks in Korean, you MUST respond in Korean.
+   
+2. **Visualization/Charting:**
+   - If the user asks to draw a chart or visualize data, use the `plotly` library.
+   - **CRITICAL:** After creating a figure (e.g., `fig`), you MUST save it as a JSON file named 'output_plot.json' using the code: `fig.write_json('output_plot.json')`.
+   - Do not just mention the chart; execute the code to save the file.
 
-                    # Updated Instruction for English Output
-                    instruction = f"""
-                    You are a capable data analyst.
+3. **Tool Usage:** You have a pandas dataframe tool. Use it to run python code.
+4. **Verification:** Check column names before using them.
+5. **Final Answer:** Provide a concise summary of your findings along with the requested data.
+"""
+
+if prompt := st.chat_input("Ask a question..."):
+    st.chat_message("user").markdown(prompt)
+    st.session_state.messages.append({"role": "user", "content": prompt})
+
+    with st.chat_message("assistant"):
+        with st.spinner("Analyzing..."):
+            try:
+                # 1. Filter Data
+                years = extract_years(prompt)
+                df_filtered = df.copy()
+
+                if years:
+                    df_filtered = df_filtered[df_filtered["Year"].isin(years)]
+                
+                if df_filtered.empty:
+                     df_filtered = df.copy()
+
+                df_filtered = filter_columns_by_question(df_filtered, prompt)
+
+                # 2. Create Agent
+                agent = create_pandas_dataframe_agent(
+                    llm,
+                    df_filtered,
+                    verbose=True,
+                    allow_dangerous_code=True,
+                    prefix=PREFIX_PROMPT,
+                    agent_type="openai-tools",
+                    max_iterations=10,
+                    agent_executor_kwargs={
+                        "handle_parsing_errors": True
+                    }
+                )
+
+                # 에이전트 실행
+                response = agent.invoke({"input": prompt})
+                answer = response["output"]
+
+                st.markdown(answer)
+                msg_data = {"role": "assistant", "content": answer}
+
+                # 3. 차트 파일 확인 및 출력
+                if os.path.exists("output_plot.json"):
+                    with open("output_plot.json", "r", encoding="utf-8") as f:
+                        plot_json_content = f.read()
                     
-                    [Data Column Definitions]
-                    {COLUMN_DEFINITIONS}
-                    Refer to the definitions above to match user queries to the correct columns.
+                    # 화면에 차트 표시
+                    fig = pio.from_json(plot_json_content)
+                    st.plotly_chart(fig, use_container_width=True)
                     
-                    [Chart Generation Rules]
-                    1. Use **Plotly Express** (variable name: fig).
-                    2. Save the graph as a JSON file (`output_plot.json`).
-                    3. Do NOT use `fig.show()`.
-                    
-                    [Context from Previous Conversation]
-                    {chat_history_text}
-                    
-                    **Please answer the question in English.**
-                    """
-                    full_prompt = f"{instruction}\n\n[Current Question]\n{prompt}"
-                    response = agent.invoke(full_prompt)
-                    answer = response['output']
+                    # 메시지 기록에 저장
+                    msg_data["plot_json"] = plot_json_content
+                    # 사용 후 파일 삭제 (다음 질문과의 혼선 방지)
+                    os.remove("output_plot.json")
 
-                    st.markdown(answer)
-                    msg_data = {"role": "assistant", "content": answer}
+                st.session_state.messages.append(msg_data)
 
-                    if os.path.exists("output_plot.json"):
-                        try:
-                            with open("output_plot.json", "r", encoding="utf-8") as f:
-                                plot_json = f.read()
-                        except UnicodeDecodeError:
-                            with open("output_plot.json", "r", encoding="cp949") as f:
-                                plot_json = f.read()
-                        
-                        fig = pio.from_json(plot_json)
-                        st.plotly_chart(fig, use_container_width=True)
-                        msg_data["plot_json"] = plot_json
-                        os.remove("output_plot.json")
-
-                    st.session_state.messages.append(msg_data)
-
-                except Exception as e:
-                    st.error(f"An error occurred: {e}")
-
+            except Exception as e:
+                st.warning(f"⚠️ Analysis failed. (Error: {e})")
