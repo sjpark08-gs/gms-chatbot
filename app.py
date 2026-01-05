@@ -11,59 +11,15 @@ from langchain_experimental.agents import create_pandas_dataframe_agent
 # 1. Basic Setup
 # =========================================================
 load_dotenv()
-st.set_page_config(
-    page_title="GMS Data Analysis Chatbot (Pro)",
-    page_icon="📊",
-    layout="wide"
-)
+st.set_page_config(page_title="GMS Data Analysis Pro", page_icon="📊", layout="wide")
 
-# =========================================================
-# 2. Smart Excel Loader & Preprocess
-# =========================================================
-@st.cache_data 
-def load_and_process_data(file):
-    # 1. Load Smartly (Header Detection)
-    preview_df = pd.read_excel(file, sheet_name="2nd treatment", header=None, nrows=10)
-    header_idx = 0
-    keywords = ['date', '일자', '날짜', 'period', 'time']
+if "messages" not in st.session_state:
+    st.session_state.messages = []
+if "df" not in st.session_state:
+    st.session_state.df = None
 
-    for idx, row in preview_df.iterrows():
-        row_str = row.astype(str).str.lower().tolist()
-        if any(k in cell for cell in row_str for k in keywords):
-            header_idx = idx
-            break
+DEFAULT_FILE_PATH = "Updated_Monthly_Report.xlsx"
 
-    df = pd.read_excel(file, sheet_name="2nd treatment", header=header_idx)
-
-    # 2. Preprocess
-    df.columns = df.columns.astype(str).str.strip().str.replace('\n', '')
-
-    for col in df.columns:
-        if col.lower() in ['date', 'time', 'period', '일자', '날짜']:
-            df.rename(columns={col: 'Date'}, inplace=True)
-            break
-
-    if 'Date' in df.columns:
-        df['Date'] = pd.to_datetime(df['Date'], errors='coerce')
-        df = df.dropna(subset=['Date'])
-        df['Year'] = df['Date'].dt.year  # ⭐ 미리 생성
-
-    for col in df.columns:
-        if col not in ['Date'] and df[col].dtype == 'object':
-            try:
-                df[col] = (
-                    df[col].astype(str)
-                    .str.replace(r'[$,\s]', '', regex=True)
-                )
-                df[col] = pd.to_numeric(df[col], errors='coerce')
-            except:
-                pass
-
-    return df
-
-# =========================================================
-# 3. Column Definitions
-# =========================================================
 COLUMN_DEFINITIONS = {
     "Revenue": "Revenue, Sales, Income, Total Sales",
     "Penalty": "Penalty, Fine",
@@ -78,10 +34,109 @@ COLUMN_DEFINITIONS = {
     "GA": "GA, General Administrative Expenses"
 }
 
-DEFAULT_FILE_PATH = "Updated_Monthly_Report.xlsx"
+# =========================================================
+# 2. Smart Excel Loader & Preprocess
+# =========================================================
+@st.cache_data 
+def load_and_process_data(file):
+    try:
+        preview_df = pd.read_excel(file, sheet_name="2nd treatment", header=None, nrows=10)
+        header_idx = 0
+        keywords = ['date', '일자', '날짜', 'period', 'time']
+        for idx, row in preview_df.iterrows():
+            row_str = row.astype(str).str.lower().tolist()
+            if any(k in cell for cell in row_str for k in keywords):
+                header_idx = idx
+                break
+
+        df = pd.read_excel(file, sheet_name="2nd treatment", header=header_idx)
+        df.columns = df.columns.astype(str).str.strip().str.replace('\n', '')
+
+        for col in df.columns:
+            if col.lower() in ['date', 'time', 'period', '일자', '날짜']:
+                df.rename(columns={col: 'Date'}, inplace=True)
+                break
+
+        if 'Date' in df.columns:
+            df['Date'] = pd.to_datetime(df['Date'], errors='coerce')
+            df = df.dropna(subset=['Date'])
+            df['Year'] = df['Date'].dt.year
+            df['Month'] = df['Date'].dt.month
+            
+        for col in df.columns:
+            if col not in ['Date', 'Year', 'Month'] and df[col].dtype == 'object':
+                try:
+                    df[col] = df[col].astype(str).str.replace(r'[$,\s]', '', regex=True)
+                    df[col] = pd.to_numeric(df[col], errors='coerce')
+                except: pass
+        return df
+    except Exception as e:
+        st.error(f"File Load Error: {e}")
+        return None
+    
+# =========================================================
+# 3. Sidebar (English UI)
+# =========================================================
+with st.sidebar:
+    st.header("⚙️ Settings")
+    uploaded_file = st.file_uploader("Upload Excel File", type=["xlsx"])
+
+    # --- 📋 Available Columns ---
+    st.divider()
+    st.subheader("📋 Available Columns")
+    raw_cols = "Date	Revenue	Panelty	Net Revenue	Water Consumption	Power Consumption	Pipe fee	Chemical Consumption-GMS	Operation Cost-GMS	Chemical Consumption-KE	Operation Cost-KE	Total COGS	Gross Profit	Financial Income	Financial Expense	Sales Expense	GA	Net Profit	Net Profit before Tax	CIT	Net Profit after Tax	Revenue (Quantity)	Panelty (Quantity)	Water Consumption (Quantity)	Power Consumption (Quantity)	Other Income(Claim)"
+    column_list = [c.strip() for c in raw_cols.split('\t') if c.strip()]
+
+    with st.expander("View Column List", expanded=False):
+        for col in column_list:
+            st.caption(f"• {col}")
+
+    # --- 🧮 Calculation Guide ---
+    st.divider()
+    st.subheader("🧮 Calculation Formulas")
+    formulas = [
+        "**Net Revenue** = Revenue + Penalty + Other Income",
+        "**Operation Cost** = Water Cons. + Power Cons. + Pipe fee",
+        "**Total COGS** = Operation Cost-GMS + Operation Cost-KE",
+        "**Gross Profit** = Net Revenue - Total COGS",
+        "**Net Profit** = Gross Profit + Fin. Inc - Fin. Exp - Sales Exp - GA"
+    ]
+    for f in formulas:
+        st.caption(f)
+
+    # --- ℹ️ Notice ---
+    st.divider()
+    st.subheader("ℹ️ Notice")
+    st.info("""
+    - Each Chemical Cost is included in the Operation Cost.
+    - The operation cost does not include sludge disposal fees, monitoring costs, or other operating expenses.
+    - 'Chemical Consumption' refers to **Cost (Value)**; 'Usage Volume' is not available.
+    - Please use the words in Column list, when you chat with the bot.
+    """)
+
+    # --- 📝 Quick Memo ---
+    st.divider()
+    st.subheader("📝 Quick Memo")
+    memo_input = st.text_area("Message:", height=100)
+    
+    if st.button("💾 Save"):
+        if memo_input.strip():
+            import datetime
+            now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
+            with open("memos.txt", "a", encoding="utf-8") as f:
+                f.write(f"[{now}] {memo_input}\n---\n")
+            st.rerun()
+
+    if os.path.exists("memos.txt"):
+        with st.expander("📖 Saved Memos"):
+            try:
+                with open("memos.txt", "r", encoding="utf-8", errors='replace') as f:
+                    st.text(f.read())
+            except:
+                st.text("Unable to load memos.")
 
 # =========================================================
-# 4. Token Optimizer
+# 4. Helpers
 # =========================================================
 def extract_years(text):
     years = re.findall(r"(20\d{2})", text)
@@ -90,40 +145,30 @@ def extract_years(text):
 def filter_columns_by_question(df, question):
     selected = ["Date", "Year"] 
     q = question.lower()
-
     for col, desc in COLUMN_DEFINITIONS.items():
         if any(word.strip().lower() in q for word in desc.split(",")):
-            if col in df.columns:
-                selected.append(col)
-
+            if col in df.columns: selected.append(col)
     return df[selected] if len(selected) > 2 else df
 
 # =========================================================
-# 5. UI Setup
+# 5. UI Setup & Data Load
 # =========================================================
-st.title("🤖 GMS Data Analysis Agent (Optimized)")
-
-with st.sidebar:
-    st.header("Settings")
-    uploaded_file = st.file_uploader("Upload Excel File", type=["xlsx", "xls"])
+st.title("🤖 GMS Data Analysis Agent")
 
 source_file = uploaded_file if uploaded_file else DEFAULT_FILE_PATH
 
-# =========================================================
-# 6. Load Data
-# =========================================================
-if source_file:
-    try:
-        if "df" not in st.session_state:
-             st.session_state.df = load_and_process_data(source_file)
-    except Exception as e:
-        st.error(f"File Load Error: {e}")
-        st.stop()
-else:
-    st.error("No file available.")
-    st.stop()
+if st.session_state.df is None or uploaded_file:
+    st.session_state.df = load_and_process_data(source_file)
 
 df = st.session_state.df
+
+if df is not None:
+    with st.expander("✅ Data Loading Status", expanded=False):
+        st.write("Current data availability by Year and Month:")
+        inventory = df.groupby(['Year', 'Month']).size().unstack(fill_value=0)
+        st.table(inventory)
+else:
+    st.stop()
 
 with st.expander("📊 Data Preview"):
     st.dataframe(df.head())
@@ -131,9 +176,6 @@ with st.expander("📊 Data Preview"):
 # =========================================================
 # 7. Chat Interface
 # =========================================================
-if "messages" not in st.session_state:
-    st.session_state.messages = []
-
 for msg in st.session_state.messages:
     with st.chat_message(msg["role"]):
         st.markdown(msg["content"])
@@ -141,88 +183,94 @@ for msg in st.session_state.messages:
             st.plotly_chart(pio.from_json(msg["plot_json"]), use_container_width=True)
 
 # =========================================================
-# 8. Agent & Logic (기존 기능 유지 + 대화 문맥 기억 추가)
+# 8. Agent & Logic (차트 생성 억제 로직 강화)
 # =========================================================
-llm = ChatOpenAI(
-    model="gpt-4o-mini", 
-    temperature=0
-)
-
-# 딕셔너리를 문자열로 변환 (Prompt용)
+llm = ChatOpenAI(model="gpt-4o-mini", temperature=0)
 column_def_str = "\n".join([f"- {k}: {v}" for k, v in COLUMN_DEFINITIONS.items()])
 
 if prompt := st.chat_input("Ask a question..."):
     st.chat_message("user").markdown(prompt)
     st.session_state.messages.append({"role": "user", "content": prompt})
 
-    # ⭐ [추가] 이전 대화 기록을 텍스트로 변환 (최근 5개 메시지만)
+    chart_keywords = ["차트", "그래프", "그려", "시각화", "chart", "graph", "plot", "visualize"]
+    is_chart_requested = any(word in prompt.lower() for word in chart_keywords)
+
     history = "\n".join([f"{m['role']}: {m['content']}" for m in st.session_state.messages[-6:-1]])
 
-    # ⭐ [수정] PREFIX_PROMPT를 입력 시점에 정의하여 'history'를 포함시킴
     PREFIX_PROMPT = f"""
-You are a Senior Data Analyst.
-Use ONLY the provided DataFrame.
+    You are a Senior Data Analyst. Use ONLY the provided DataFrame.
 
-[Column Mapping]
-{column_def_str}
+    [Column Mapping]
+    {column_def_str}
 
-[Conversation Context]
-{history}
-(Note: Use this context to understand pronouns like 'it', 'before', or 'that table'.)
+    [Conversation Context]
+    {history}
+    
 
-[Instructions]
-1. **Language Policy:** Detect user's language and respond in the SAME language (English or Korean).
-2. **Visualization:** If requested, use plotly and MUST save it as 'output_plot.json' via `fig.write_json('output_plot.json')`.
-3. **Tool Usage:** Use the pandas dataframe tool for analysis.
-4. **Verification:** Check column names before using them.
-5. **Final Answer:** Provide a concise summary.
-"""
+    [Relationship of Each Column / Calculation Formulas]
+    Follow these rules for calculations:
+    1. Net Revenue = Revenue + Panelty + Other Income(Claim)
+    2. Operation Cost = Water Consumption + Power Consumption + Pipe fee
+    3. Total COGS = Operation Cost-GMS + Operation Cost-KE
+    4. Gross Profit = Net Revenue - Total COGS
+    5. Net Profit = Gross Profit + Financial Income - Financial Expense - Sales Expense - GA
+
+    [Instructions]
+    1. **Language Policy:** Detect language and respond in the SAME language.
+    2. **Efficiency:** When calculating for multiple months, create new temporary columns in the dataframe for these formulas first, then summarize. This is faster than calculating row by row.
+    3. **Verification:** Check column names before using them.
+    4. **CRITICAL (Show All Months):** When asked for a year's data, you MUST provide values for all 12 months.
+    5. **CRITICAL (No Scaling):** DO NOT multiply or divide values by 1,000. Use raw numbers in df.
+    6. **Final Answer:** Provide a full table and a concise summary.
+    7. Show unit automatically. Most of items are 'VND'. but, Revenue (Quantity) and Panelty (Quantity), Water Consumption (Quantity) are "m3", Power Consumption (Quantity) is "kWh" 
+
+    [Strict Visualization Rules]
+    - NEVER create a chart unless the user explicitly uses words like 'chart', 'graph', or 'draw a chart'.
+    - If a chart is requested, save as 'output_plot.json' via `fig.write_json('output_plot.json')`.
+    """
 
     with st.chat_message("assistant"):
         with st.spinner("Analyzing..."):
             try:
-                # 1. Filter Data (기존 로직 유지)
+                # 데이터 필터링
                 years = extract_years(prompt)
                 df_filtered = df.copy()
                 if years:
                     df_filtered = df_filtered[df_filtered["Year"].isin(years)]
-                if df_filtered.empty:
-                    df_filtered = df.copy()
-                df_filtered = filter_columns_by_question(df_filtered, prompt)
-
-                # 2. Create Agent (기존 로직 유지)
+                
+                # 에이전트 생성 (사고 횟수 상향)
                 agent = create_pandas_dataframe_agent(
-                    llm,
-                    df_filtered,
-                    verbose=True,
-                    allow_dangerous_code=True,
-                    prefix=PREFIX_PROMPT, # 위에서 정의한 context 포함 프롬프트 사용
-                    agent_type="openai-tools",
-                    max_iterations=10,
-                    agent_executor_kwargs={"handle_parsing_errors": True}
+                    llm, df_filtered, verbose=True, allow_dangerous_code=True,
+                    prefix=PREFIX_PROMPT, agent_type="openai-tools", 
+                    max_iterations=20 # 복잡한 수식 처리를 위해 상향 유지
                 )
 
-                # 에이전트 실행
-                response = agent.invoke({"input": prompt})
+                # 명령어 구성
+                if is_chart_requested:
+                    final_input = f"{prompt} (Instruction: Chart requested. Save output_plot.json)"
+                else:
+                    final_input = f"{prompt} (Instruction: TEXT TABLE only. No charts allowed.)"
+
+                response = agent.invoke({"input": final_input})
                 answer = response["output"]
 
                 st.markdown(answer)
                 msg_data = {"role": "assistant", "content": answer}
 
-                # 3. 차트 파일 확인 및 출력 (기존 로직 유지)
+                # 차트 출력 처리
                 if os.path.exists("output_plot.json"):
-                    with open("output_plot.json", "r", encoding="utf-8") as f:
-                        plot_json_content = f.read()
-                    
-                    fig = pio.from_json(plot_json_content)
-                    st.plotly_chart(fig, use_container_width=True)
-                    
-                    msg_data["plot_json"] = plot_json_content
+                    if is_chart_requested:
+                        with open("output_plot.json", "r", encoding="utf-8", errors='replace') as f:
+                            plot_json_content = f.read()
+                        fig = pio.from_json(plot_json_content)
+                        st.plotly_chart(fig, use_container_width=True)
+                        msg_data["plot_json"] = plot_json_content
                     os.remove("output_plot.json")
 
                 st.session_state.messages.append(msg_data)
 
             except Exception as e:
-                st.warning(f"⚠️ Analysis failed. (Error: {e})")
-
-
+                if "max iterations" in str(e).lower():
+                    st.warning("⚠️ Query is too complex. Please try breaking it down.")
+                else:
+                    st.warning(f"⚠️ Analysis failed. (Error: {e})")
